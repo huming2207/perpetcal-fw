@@ -203,7 +203,7 @@ void lv_st7789_init()
             .miso_io_num = -1, // We don't need to get any bullshit from the panel, so no MISO needed.
             .quadhd_io_num = -1,
             .quadwp_io_num = -1,
-            .max_transfer_sz = 240 * 240 * 3
+            .max_transfer_sz = 240 * 240 * 2
     };
 
     spi_device_interface_config_t device_config = {
@@ -218,7 +218,7 @@ void lv_st7789_init()
     };
 
     ESP_LOGI(LOG_TAG, "Performing SPI init...");
-    ESP_ERROR_CHECK(spi_bus_initialize(HSPI_HOST, &bus_config, 1));
+    ESP_ERROR_CHECK(spi_bus_initialize(HSPI_HOST, &bus_config, SPI_DMA_CH_AUTO));
     ESP_ERROR_CHECK(spi_bus_add_device(HSPI_HOST, &device_config, &device_handle));
     ESP_LOGI(LOG_TAG, "SPI initialization finished, sending init sequence to IPS panel...");
 
