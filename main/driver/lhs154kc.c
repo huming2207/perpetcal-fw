@@ -184,12 +184,14 @@ void lv_st7789_flush(lv_disp_drv_t *disp_drv, const lv_area_t * area, lv_color_t
     lv_disp_flush_ready(disp_drv);
 }
 
-void lv_st7789_init()
+esp_err_t lv_st7789_init()
 {
 
     ESP_LOGI(LOG_TAG, "Performing GPIO init...");
-    ESP_ERROR_CHECK(gpio_set_direction(CONFIG_LCD_IO_DC, GPIO_MODE_OUTPUT));
-    ESP_ERROR_CHECK(gpio_set_direction(CONFIG_LCD_IO_RST, GPIO_MODE_OUTPUT));
+    esp_err_t ret = gpio_set_direction(CONFIG_LCD_IO_DC, GPIO_MODE_OUTPUT);
+    ret = ret ?: gpio_set_pull_mode(CONFIG_LCD_IO_DC, GPIO_PULLUP_ONLY);
+    ret = ret ?: gpio_set_direction(CONFIG_LCD_IO_RST, GPIO_MODE_OUTPUT);
+    ret = ret ?: gpio_set_pull_mode(CONFIG_LCD_IO_RST, GPIO_PULLUP_ONLY);
     ESP_LOGI(LOG_TAG, "GPIO initialization finished, resetting OLED...");
 
     ESP_ERROR_CHECK(gpio_set_level(CONFIG_LCD_IO_RST, 0));
@@ -218,8 +220,8 @@ void lv_st7789_init()
     };
 
     ESP_LOGI(LOG_TAG, "Performing SPI init...");
-    ESP_ERROR_CHECK(spi_bus_initialize(HSPI_HOST, &bus_config, SPI_DMA_CH_AUTO));
-    ESP_ERROR_CHECK(spi_bus_add_device(HSPI_HOST, &device_config, &device_handle));
+    ret = ret ?: spi_bus_initialize(SPI2_HOST, &bus_config, SPI_DMA_CH_AUTO);
+    ret = ret ?: spi_bus_add_device(SPI2_HOST, &device_config, &device_handle);
     ESP_LOGI(LOG_TAG, "SPI initialization finished, sending init sequence to IPS panel...");
 
     // Wake up

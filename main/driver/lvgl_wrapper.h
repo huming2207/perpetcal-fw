@@ -1,8 +1,13 @@
-//
-// Created by hu on 20/05/22.
-//
+#pragma once
 
-#ifndef PERPETCAL_LVGL_WRAPPER_H
-#define PERPETCAL_LVGL_WRAPPER_H
+#include <esp_err.h>
 
-#endif //PERPETCAL_LVGL_WRAPPER_H
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+esp_err_t cal_disp_init();
+
+#ifdef __cplusplus
+}
+#endif
