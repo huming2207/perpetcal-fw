@@ -219,10 +219,13 @@ esp_err_t lv_st7789_init()
             .queue_size = 7
     };
 
-    ESP_LOGI(LOG_TAG, "Performing SPI init...");
+    ESP_LOGI(LOG_TAG, "SPI Init");
     ret = ret ?: spi_bus_initialize(SPI2_HOST, &bus_config, SPI_DMA_CH_AUTO);
     ret = ret ?: spi_bus_add_device(SPI2_HOST, &device_config, &device_handle);
-    ESP_LOGI(LOG_TAG, "SPI initialization finished, sending init sequence to IPS panel...");
+    if (ret != ESP_OK) {
+        ESP_LOGE(LOG_TAG, "SPI Init failed");
+        return ret;
+    }
 
     // Wake up
     const uint8_t sleep_out = 0x11;
@@ -251,4 +254,6 @@ esp_err_t lv_st7789_init()
     // Turn on the panel
     const uint8_t disp_on_reg = 0x29;
     st7789_spi_send_byte(&disp_on_reg, 1, true);
+
+    return ret;
 }
