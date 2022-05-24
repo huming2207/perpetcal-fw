@@ -2,10 +2,12 @@
 #include <esp_crc.h>
 #include <esp_mac.h>
 #include <esp_flash.h>
+#include <esp_partition.h>
+#include <esp_ota_ops.h>
 
 #include "usb_cdc.hpp"
 #include "config_manager.hpp"
-
+#include "file_utils.hpp"
 
 esp_err_t usb_cdc::init()
 {
@@ -157,12 +159,12 @@ void usb_cdc::serial_rx_cb(int itf, cdcacm_event_t *event)
     }
 }
 
-esp_err_t usb_cdc::send_ack(uint16_t crc, uint32_t timeout_ms)
+esp_err_t usb_cdc::send_ack()
 {
     return send_pkt(cdc_def::PKT_ACK, nullptr, 0);
 }
 
-esp_err_t usb_cdc::send_nack(uint32_t timeout_ms)
+esp_err_t usb_cdc::send_nack()
 {
     return send_pkt(cdc_def::PKT_NACK, nullptr, 0);
 }
@@ -411,10 +413,10 @@ void usb_cdc::parse_get_fw_info()
 
 }
 
-void usb_cdc::parse_set_fw_metadata()
+void usb_cdc::parse_chunk_metadata()
 {
-    auto *fw_info = (cdc_def::fw_info *)(decoded_buf + sizeof(cdc_def::header));
-    if (fw_info->len > CFG_MGR_FW_MAX_SIZE || heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) < fw_info->len) {
+    auto *fw_info = (cdc_def::chunk_metadata_pkt *)(decoded_buf + sizeof(cdc_def::header));
+    if (fw_info->len > UINT32_MAX || heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) < fw_info->len) {
         ESP_LOGE(TAG, "Firmware metadata len too long: %u, free heap: %u", fw_info->len, heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
         heap_caps_dump(MALLOC_CAP_INTERNAL);
         send_nack();
@@ -423,19 +425,50 @@ void usb_cdc::parse_set_fw_metadata()
 
     file_expect_len = fw_info->len;
     file_crc = fw_info->crc;
-    file_handle = fopen(config_manager::FIRMWARE_PATH, "wb");
-    if (file_handle == nullptr) {
-        ESP_LOGE(TAG, "Failed to open firmware path");
-        return;
+    if (fw_info->type == cdc_def::XFER_OTA) {
+        fw_info->path[sizeof(fw_info->path) - 1] = '\0';
+        const esp_partition_t *part;
+        if (strlen(fw_info->path) < 1 || strcmp(fw_info->path, CDC_OTA_PARTITION_AUTO_MAGIC) == 0) {
+            part = esp_ota_get_next_update_partition(nullptr);
+        } else {
+            part = esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_ANY, fw_info->path);
+        }
+
+        ESP_LOGW(TAG, "OTA part: %s, addr 0x%x, now start OTA xfer", part->label, part->address);
+        if (esp_ota_begin(part, fw_info->len, &ota_handle) != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to start OTA");
+            send_nack();
+            return;
+        }
+
+        on_chunk_xfer = true;
+        on_ota_xfer = true;
+        ESP_LOGW(TAG, "OTA xfer started");
+    } else if (fw_info->type == cdc_def::XFER_FILE) {
+        file_handle = fopen(fw_info->path, "wb");
+        if (file_handle == nullptr) {
+            ESP_LOGE(TAG, "Failed to open firmware path");
+            send_nack();
+            return;
+        }
+
+        on_chunk_xfer = true;
+        on_ota_xfer = false;
     }
 
-    recv_state = cdc_def::FILE_RECV_FW;
+
     send_chunk_ack(cdc_def::CHUNK_XFER_NEXT, 0);
 }
 
 void usb_cdc::parse_chunk()
 {
     auto *chunk = (cdc_def::chunk_pkt *)(decoded_buf + sizeof(cdc_def::header));
+
+    // Scenario -1: something screwed up
+    if (!on_chunk_xfer) {
+        ESP_LOGE(TAG, "No metadata received for xfer");
+        send_chunk_ack(cdc_def::CHUNK_ERR_INTERNAL, 0);
+    }
 
     // Scenario 0: if len == 0 then that's force abort, discard the buffer and set back the states
     if (chunk->len == 0) {
@@ -447,7 +480,6 @@ void usb_cdc::parse_chunk()
             free(algo_buf);
             algo_buf = nullptr;
         }
-        recv_state = cdc_def::FILE_RECV_NONE;
         send_chunk_ack(cdc_def::CHUNK_ERR_ABORT_REQUESTED, 0);
         return;
     }
@@ -468,17 +500,15 @@ void usb_cdc::parse_chunk()
             file_handle = nullptr;
         }
 
-        recv_state = cdc_def::FILE_RECV_NONE;
         send_chunk_ack(cdc_def::CHUNK_ERR_NAME_TOO_LONG, chunk->len + file_curr_offset);
         return;
     }
 
     // Scenario 2: Normal recv
-    if (recv_state == cdc_def::FILE_RECV_ALGO) {
-        ESP_LOGD(TAG, "Copy to: %p; len: %u, off: %u, base: %p", algo_buf + file_curr_offset, chunk->len, file_curr_offset, algo_buf);
-        memcpy(algo_buf + file_curr_offset, chunk->buf, chunk->len);
+    if (on_ota_xfer) {
+        ESP_LOGD(TAG, "Copy to: %p; len: %u, off: %u", algo_buf + file_curr_offset, chunk->len, file_curr_offset);
         file_curr_offset += chunk->len; // Add offset
-    } else if(recv_state == cdc_def::FILE_RECV_FW) {
+    } else {
         if (fwrite(chunk->buf, 1, chunk->len, file_handle) < chunk->len) {
             ESP_LOGE(TAG, "Error occur when processing recv buffer - write failed");
             send_chunk_ack(cdc_def::CHUNK_ERR_INTERNAL, ESP_ERR_NO_MEM);
@@ -563,62 +593,148 @@ esp_err_t usb_cdc::unpause_usb()
 void usb_cdc::parse_kv_get_u32()
 {
     auto &cfg = config_manager::instance();
+    auto *buf = (cdc_def::kv_get_delete_pkt *)(decoded_buf + sizeof(cdc_def::header));
 
+    uint32_t val = 0;
+    if (cfg.get_u32(buf->key, val) != ESP_OK) {
+        send_nack();
+    } else {
+        cdc_def::kv_get_u32_pkt pkt = {};
+        pkt.value = val;
+        send_pkt(cdc_def::PKT_KV_GET_U32, (uint8_t *)&pkt, sizeof(pkt));
+    }
 }
 
 void usb_cdc::parse_kv_set_u32()
 {
-
+    auto &cfg = config_manager::instance();
+    auto *buf = (cdc_def::kv_set_u32_pkt *)(decoded_buf + sizeof(cdc_def::header));
+    if (cfg.set_u32(buf->key, buf->value) != ESP_OK) {
+        send_nack();
+    } else {
+        send_ack();
+    }
 }
 
 void usb_cdc::parse_kv_get_i32()
 {
+    auto &cfg = config_manager::instance();
+    auto *buf = (cdc_def::kv_get_delete_pkt *)(decoded_buf + sizeof(cdc_def::header));
 
+    int32_t val = 0;
+    if (cfg.get_i32(buf->key, val) != ESP_OK) {
+        send_nack();
+    } else {
+        cdc_def::kv_get_i32_pkt pkt = {};
+        pkt.abs_val = abs(val);
+        pkt.sign = val < 0 ? 1 : 0;
+        send_pkt(cdc_def::PKT_KV_GET_I32, (uint8_t *)&pkt, sizeof(pkt));
+    }
 }
 
 void usb_cdc::parse_kv_set_i32()
 {
-
+    auto &cfg = config_manager::instance();
+    auto *buf = (cdc_def::kv_set_i32_pkt *)(decoded_buf + sizeof(cdc_def::header));
+    auto value = (int32_t)(buf->abs_val * (buf->sign ? -1 : 1));
+    if (cfg.set_i32(buf->key, value) != ESP_OK) {
+        send_nack();
+    } else {
+        send_ack();
+    }
 }
 
 void usb_cdc::parse_kv_get_str()
 {
+    auto &cfg = config_manager::instance();
+    auto *buf = (cdc_def::kv_get_delete_pkt *)(decoded_buf + sizeof(cdc_def::header));
 
+    cdc_def::kv_get_str_pkt pkt = {};
+    if (cfg.get_str(buf->key, pkt.buf, sizeof(pkt.buf) - 1) != ESP_OK) {
+        send_nack();
+    } else {
+        send_pkt(cdc_def::PKT_KV_GET_STR, (uint8_t *)&pkt, sizeof(pkt));
+    }
 }
 
 void usb_cdc::parse_kv_set_str()
 {
+    auto &cfg = config_manager::instance();
+    auto *buf = (cdc_def::kv_set_str_pkt *)(decoded_buf + sizeof(cdc_def::header));
+    buf->buf[sizeof(buf->buf) - 1] = '\0';
+    if (buf->len != strlen(buf->buf)) {
+        send_nack();
+        return;
+    }
 
+    if (cfg.set_str(buf->key, buf->buf) != ESP_OK) {
+        send_nack();
+    } else {
+        send_ack();
+    }
 }
 
 void usb_cdc::parse_kv_get_blob()
 {
+    auto &cfg = config_manager::instance();
+    auto *buf = (cdc_def::kv_get_delete_pkt *)(decoded_buf + sizeof(cdc_def::header));
 
+    cdc_def::kv_get_blob_pkt pkt = {};
+    if (cfg.get_blob(buf->key, pkt.buf, sizeof(pkt.buf) - 1) != ESP_OK) {
+        send_nack();
+    } else {
+        send_pkt(cdc_def::PKT_KV_GET_BLOB, (uint8_t *)&pkt, sizeof(pkt));
+    }
 }
 
 void usb_cdc::parse_kv_set_blob()
 {
-
+    auto &cfg = config_manager::instance();
+    auto *buf = (cdc_def::kv_set_blob_pkt *)(decoded_buf + sizeof(cdc_def::header));
+    if (cfg.set_blob(buf->key, buf->buf, buf->len) != ESP_OK) {
+        send_nack();
+    } else {
+        send_ack();
+    }
 }
 
 void usb_cdc::parse_kv_cnt()
 {
-
+    cdc_def::kv_get_u32_pkt pkt = {};
+    auto &cfg = config_manager::instance();
+    pkt.value = cfg.used_count();
+    send_pkt(cdc_def::PKT_KV_ENTRY_COUNT, (uint8_t *)(&pkt), sizeof(pkt));
 }
 
 void usb_cdc::parse_kv_flush()
 {
-
+    auto &cfg = config_manager::instance();
+    if (cfg.flush() != ESP_OK) {
+        send_nack();
+    } else {
+        send_ack();
+    }
 }
 
 void usb_cdc::parse_kv_delete()
 {
-
+    auto &cfg = config_manager::instance();
+    auto *buf = (cdc_def::kv_get_delete_pkt *)(decoded_buf + sizeof(cdc_def::header));
+    if (cfg.erase(buf->key) != ESP_OK) {
+        send_nack();
+    } else {
+        send_ack();
+    }
 }
 
 void usb_cdc::parse_kv_nuke()
 {
-
+    auto &cfg = config_manager::instance();
+    if (cfg.nuke() != ESP_OK) {
+        send_nack();
+    } else {
+        send_ack();
+    }
 }
 
 

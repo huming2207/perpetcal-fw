@@ -11,6 +11,7 @@
 #define SLIP_ESC            0xdb
 #define SLIP_ESC_END        0xdc
 #define SLIP_ESC_ESC        0xdd
+#define CDC_OTA_PARTITION_AUTO_MAGIC "WHATEVER_NEXT"
 
 #ifndef CONFIG_SI_DEVICE_MODEL
 #define CDC_DEVICE_MODEL "PerpetCal Demo"
@@ -26,10 +27,9 @@
 
 namespace cdc_def
 {
-    enum file_recv_state : uint8_t {
-        FILE_RECV_NONE = 0,
-        FILE_RECV_FW = 1,
-        FILE_RECV_ALGO = 2,
+    enum chunk_xfer_type : uint8_t {
+        XFER_FILE = 0,
+        XFER_OTA = 1,
     };
 
     enum event : uint32_t {
@@ -69,6 +69,13 @@ namespace cdc_def
         CHUNK_ERR_NAME_TOO_LONG = 5,
     };
 
+    struct __attribute__((packed)) chunk_metadata_pkt {
+        cdc_def::chunk_xfer_type type;
+        uint32_t len;
+        uint32_t crc; // Unused for OTA, as Espressif already has that SHA256 anyway??
+        char path[128]; // Path for files, or partition name for OTA; leave CDC_OTA_PARTITION_AUTO_MAGIC (string "WHATEVER_NEXT") to let it automatically pick one
+    };
+
     struct __attribute__((packed)) chunk_ack_pkt {
         chunk_ack state;
 
@@ -105,21 +112,48 @@ namespace cdc_def
         uint8_t buf[UINT8_MAX];
     };
 
-    struct __attribute__((packed)) kv_u32_pkt {
+    struct __attribute__((packed)) kv_set_u32_pkt {
+        char key[16];
         uint32_t value;
     };
 
-    struct __attribute__((packed)) kv_i32_pkt {
+    struct __attribute__((packed)) kv_set_i32_pkt {
+        char key[16];
         uint8_t sign;
         uint32_t abs_val;
     };
 
-    struct __attribute__((packed)) kv_blob {
+    struct __attribute__((packed)) kv_set_blob_pkt {
+        char key[16];
         uint8_t len;
         uint8_t buf[UINT8_MAX];
     };
 
-    struct __attribute__((packed)) kv_str {
+    struct __attribute__((packed)) kv_set_str_pkt {
+        char key[16];
+        uint8_t len;
+        char buf[UINT8_MAX];
+    };
+
+    struct __attribute__((packed)) kv_get_delete_pkt {
+        char key[16];
+    };
+
+    struct __attribute__((packed)) kv_get_u32_pkt {
+        uint32_t value;
+    };
+
+    struct __attribute__((packed)) kv_get_i32_pkt {
+        uint8_t sign;
+        uint32_t abs_val;
+    };
+
+    struct __attribute__((packed)) kv_get_blob_pkt {
+        uint8_t len;
+        uint8_t buf[UINT8_MAX];
+    };
+
+    struct __attribute__((packed)) kv_get_str_pkt {
         uint8_t len;
         char buf[UINT8_MAX];
     };
@@ -153,6 +187,7 @@ public:
 private:
     void parse_pkt();
     void parse_chunk();
+    void parse_chunk_metadata();
     void parse_kv_get_u32();
     void parse_kv_set_u32();
     void parse_kv_get_i32();
@@ -161,23 +196,24 @@ private:
     void parse_kv_set_str();
     void parse_kv_get_blob();
     void parse_kv_set_blob();
-    void parse_kv_cnt();
-    void parse_kv_flush();
+    static void parse_kv_cnt();
+    static void parse_kv_flush();
     void parse_kv_delete();
-    void parse_kv_nuke();
+    static void parse_kv_nuke();
 
 private:
-    static esp_err_t send_ack(uint16_t crc = 0, uint32_t timeout_ms = portMAX_DELAY);
-    static esp_err_t send_nack(uint32_t timeout_ms = portMAX_DELAY);
+    static esp_err_t send_ack();
+    static esp_err_t send_nack();
     static esp_err_t send_dev_info(uint32_t timeout_ms = portMAX_DELAY);
     static esp_err_t send_chunk_ack(cdc_def::chunk_ack state, uint32_t aux = 0, uint32_t timeout_ms = portMAX_DELAY);
 
 private:
     static const constexpr char *TAG = "usb_cdc";
-    cdc_def::file_recv_state recv_state = cdc_def::FILE_RECV_NONE;
     EventGroupHandle_t rx_event = nullptr;
     volatile bool busy_decoding = false;
     volatile bool paused = false;
+    volatile bool on_chunk_xfer = false;
+    volatile bool on_ota_xfer = false;
     volatile size_t decoded_len = 0;
     volatile size_t raw_len = 0;
     size_t file_expect_len = 0;
@@ -187,4 +223,5 @@ private:
     uint8_t *decoded_buf = nullptr;
     uint8_t *algo_buf = nullptr;
     FILE *file_handle = nullptr;
+    esp_ota_handle_t ota_handle = 0;
 };
