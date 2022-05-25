@@ -221,7 +221,7 @@ private:
     uint32_t file_crc = 0;
     uint8_t *raw_buf = nullptr;
     uint8_t *decoded_buf = nullptr;
-    uint8_t *algo_buf = nullptr;
     FILE *file_handle = nullptr;
     esp_ota_handle_t ota_handle = 0;
+    const esp_partition_t *ota_part = nullptr;
 };

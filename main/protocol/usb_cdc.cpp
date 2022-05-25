@@ -303,7 +303,6 @@ void usb_cdc::parse_pkt()
 {
     if (decoded_len < sizeof(cdc_def::header)) {
         ESP_LOGW(TAG, "Packet too short, failed to decode header: %u", decoded_len);
-        recv_state = cdc_def::FILE_RECV_NONE;
         send_nack();
         return;
     }
@@ -320,7 +319,7 @@ void usb_cdc::parse_pkt()
         return;
     }
 
-    if (recv_state != cdc_def::FILE_RECV_NONE && header->type != cdc_def::PKT_DATA_CHUNK) {
+    if (on_chunk_xfer && header->type != cdc_def::PKT_DATA_CHUNK) {
         ESP_LOGW(TAG, "Invalid state - data chunk expected while received type 0x%x", header->type);
         send_nack();
         return;
@@ -337,13 +336,78 @@ void usb_cdc::parse_pkt()
             break;
         }
 
+        case cdc_def::PKT_CHUNK_METADATA: {
+            parse_chunk_metadata();
+            break;
+        }
+
         case cdc_def::PKT_DATA_CHUNK: {
-            if (recv_state != cdc_def::FILE_RECV_NONE) {
+            if (on_ota_xfer) {
                 parse_chunk();
             } else {
                 ESP_LOGW(TAG, "Invalid state - no chunk expected to come or should have EOL'ed??");
                 send_chunk_ack(cdc_def::CHUNK_ERR_INTERNAL, 0);
             }
+            break;
+        }
+
+        case cdc_def::PKT_KV_FLUSH: {
+            parse_kv_flush();
+            break;
+        }
+
+        case cdc_def::PKT_KV_SET_U32: {
+            parse_kv_set_u32();
+            break;
+        }
+
+        case cdc_def::PKT_KV_GET_U32: {
+            parse_kv_get_u32();
+            break;
+        }
+
+        case cdc_def::PKT_KV_SET_I32: {
+            parse_kv_set_i32();
+            break;
+        }
+
+        case cdc_def::PKT_KV_GET_I32: {
+            parse_kv_get_i32();
+            break;
+        }
+
+        case cdc_def::PKT_KV_SET_STR: {
+            parse_kv_set_str();
+            break;
+        }
+
+        case cdc_def::PKT_KV_GET_STR: {
+            parse_kv_get_str();
+            break;
+        }
+
+        case cdc_def::PKT_KV_SET_BLOB: {
+            parse_kv_set_blob();
+            break;
+        }
+
+        case cdc_def::PKT_KV_GET_BLOB: {
+            parse_kv_get_blob();
+            break;
+        }
+
+        case cdc_def::PKT_KV_ENTRY_COUNT: {
+            parse_kv_cnt();
+            break;
+        }
+
+        case cdc_def::PKT_KV_DELETE: {
+            parse_kv_delete();
+            break;
+        }
+
+        case cdc_def::PKT_KV_NUKE: {
+            parse_kv_nuke();
             break;
         }
 
@@ -355,63 +419,6 @@ void usb_cdc::parse_pkt()
     }
 }
 
-void usb_cdc::send_curr_config()
-{
-    auto &cfg_mgr = config_manager::instance();
-
-    if (!cfg_mgr.has_valid_cfg()) {
-        if(cfg_mgr.load_default_cfg() != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to load default config");
-            send_nack();
-            return;
-        }
-    }
-
-    uint8_t buf[sizeof(cfg_def::config_pkt)] = { 0 };
-    cfg_mgr.read_cfg(buf, sizeof(cfg_def::config_pkt));
-    send_pkt(cdc_def::PKT_CURR_CONFIG, buf, sizeof(cfg_def::config_pkt));
-}
-
-void usb_cdc::parse_set_config()
-{
-    auto *buf = (uint8_t *)(decoded_buf + sizeof(cdc_def::header));
-
-    auto &cfg_mgr = config_manager::instance();
-    auto ret = cfg_mgr.save_cfg(buf, decoded_len - sizeof(cdc_def::header));
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Set config failed, returned 0x%x: %s", ret, esp_err_to_name(ret));
-        send_nack();
-    } else {
-        send_ack();
-    }
-}
-
-void usb_cdc::parse_get_algo_info()
-{
-
-}
-
-void usb_cdc::parse_set_algo_metadata()
-{
-    auto *algo_info = (cdc_def::algo_info *)(decoded_buf + sizeof(cdc_def::header));
-    if (algo_info->len > CFG_MGR_FLASH_ALGO_MAX_SIZE || heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) < algo_info->len) {
-        ESP_LOGE(TAG, "Flash algo metadata len too long: %u, free block: %u", algo_info->len, heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
-        send_nack();
-        return;
-    }
-
-    file_expect_len = algo_info->len;
-    file_crc = algo_info->crc;
-    algo_buf = static_cast<uint8_t *>(heap_caps_malloc(algo_info->len, MALLOC_CAP_INTERNAL));
-    memset(algo_buf, 0, algo_info->len);
-    recv_state = cdc_def::FILE_RECV_ALGO;
-    send_chunk_ack(cdc_def::CHUNK_XFER_NEXT, 0);
-}
-
-void usb_cdc::parse_get_fw_info()
-{
-
-}
 
 void usb_cdc::parse_chunk_metadata()
 {
@@ -427,15 +434,15 @@ void usb_cdc::parse_chunk_metadata()
     file_crc = fw_info->crc;
     if (fw_info->type == cdc_def::XFER_OTA) {
         fw_info->path[sizeof(fw_info->path) - 1] = '\0';
-        const esp_partition_t *part;
+
         if (strlen(fw_info->path) < 1 || strcmp(fw_info->path, CDC_OTA_PARTITION_AUTO_MAGIC) == 0) {
-            part = esp_ota_get_next_update_partition(nullptr);
+            ota_part = esp_ota_get_next_update_partition(nullptr);
         } else {
-            part = esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_ANY, fw_info->path);
+            ota_part = esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_ANY, fw_info->path);
         }
 
-        ESP_LOGW(TAG, "OTA part: %s, addr 0x%x, now start OTA xfer", part->label, part->address);
-        if (esp_ota_begin(part, fw_info->len, &ota_handle) != ESP_OK) {
+        ESP_LOGW(TAG, "OTA part: %s, addr 0x%x, now start OTA xfer", ota_part->label, ota_part->address);
+        if (esp_ota_begin(ota_part, fw_info->len, &ota_handle) != ESP_OK) {
             ESP_LOGE(TAG, "Failed to start OTA");
             send_nack();
             return;
@@ -468,6 +475,9 @@ void usb_cdc::parse_chunk()
     if (!on_chunk_xfer) {
         ESP_LOGE(TAG, "No metadata received for xfer");
         send_chunk_ack(cdc_def::CHUNK_ERR_INTERNAL, 0);
+
+        on_ota_xfer = false;
+        on_chunk_xfer = false;
     }
 
     // Scenario 0: if len == 0 then that's force abort, discard the buffer and set back the states
@@ -476,10 +486,20 @@ void usb_cdc::parse_chunk()
         file_expect_len = 0;
         file_curr_offset = 0;
         file_crc = 0;
-        if (algo_buf != nullptr) {
-            free(algo_buf);
-            algo_buf = nullptr;
+        on_ota_xfer = false;
+        on_chunk_xfer = false;
+
+        if (on_ota_xfer) {
+            esp_ota_abort(ota_handle);
+        } else {
+            if (file_handle != nullptr) {
+                fclose(file_handle);
+                file_handle = nullptr;
+            }
         }
+
+        on_ota_xfer = false;
+        on_chunk_xfer = false;
         send_chunk_ack(cdc_def::CHUNK_ERR_ABORT_REQUESTED, 0);
         return;
     }
@@ -490,23 +510,25 @@ void usb_cdc::parse_chunk()
         file_expect_len = 0;
         file_curr_offset = 0;
         file_crc = 0;
-        if (algo_buf != nullptr) {
-            free(algo_buf);
-            algo_buf = nullptr;
+
+        if (on_ota_xfer) {
+            esp_ota_abort(ota_handle);
+        } else {
+            if (file_handle != nullptr) {
+                fclose(file_handle);
+                file_handle = nullptr;
+            }
         }
 
-        if (file_handle != nullptr) {
-            fclose(file_handle);
-            file_handle = nullptr;
-        }
-
+        on_ota_xfer = false;
+        on_chunk_xfer = false;
         send_chunk_ack(cdc_def::CHUNK_ERR_NAME_TOO_LONG, chunk->len + file_curr_offset);
         return;
     }
 
     // Scenario 2: Normal recv
     if (on_ota_xfer) {
-        ESP_LOGD(TAG, "Copy to: %p; len: %u, off: %u", algo_buf + file_curr_offset, chunk->len, file_curr_offset);
+        ESP_LOGD(TAG, "Chunk recv len: %u, off: %u", chunk->len, file_curr_offset);
         file_curr_offset += chunk->len; // Add offset
     } else {
         if (fwrite(chunk->buf, 1, chunk->len, file_handle) < chunk->len) {
@@ -520,43 +542,43 @@ void usb_cdc::parse_chunk()
     }
 
     if (file_curr_offset == file_expect_len) {
-        bool crc_match = false;
-        if (recv_state == cdc_def::FILE_RECV_ALGO) {
-            crc_match = (esp_crc32_le(0, algo_buf, file_expect_len) == file_crc);
-        } else if(recv_state == cdc_def::FILE_RECV_FW) {
-            if (file_handle != nullptr) {
+        bool checksum_match = false;
+        if (on_ota_xfer) {
+            checksum_match = (esp_ota_end(ota_handle) == ESP_OK);
+        } else {
+            checksum_match = (file_utils::validate_firmware_file(file_crc, file_handle) == ESP_OK);
+        }
+
+        if (checksum_match) {
+            ESP_LOGI(TAG, "Chunk recv successful, got %u bytes", file_expect_len);
+
+            // If this is not OTA xfer, close the fp handle here
+            if (!on_ota_xfer && file_handle != nullptr) {
                 fflush(file_handle);
                 fclose(file_handle);
                 file_handle = nullptr;
             }
 
-            crc_match = (file_utils::validate_firmware_file(config_manager::FIRMWARE_PATH, file_crc) == ESP_OK);
-        }
-
-        if (crc_match) {
-            ESP_LOGI(TAG, "Chunk recv successful, got %u bytes", file_expect_len);
-
-            auto ret = ESP_OK;
-            auto &cfg_mgr = config_manager::instance();
-            if (recv_state == cdc_def::FILE_RECV_ALGO) {
-                ret = cfg_mgr.save_algo(algo_buf, file_expect_len);
-
-                if (algo_buf != nullptr) {
-                    free(algo_buf);
-                    algo_buf = nullptr;
-                }
-            } else if(recv_state == cdc_def::FILE_RECV_FW) {
-                ret = cfg_mgr.set_fw_crc(file_crc);
-            }
-
             file_expect_len = 0;
             file_curr_offset = 0;
             file_crc = 0;
-            recv_state = cdc_def::FILE_RECV_NONE;
+            on_chunk_xfer = false;
+            on_ota_xfer = false;
 
-            if (ret != ESP_OK) {
-                ESP_LOGE(TAG, "Error occur when processing recv buffer, returned 0x%x: %s", ret, esp_err_to_name(ret));
-                send_chunk_ack(cdc_def::CHUNK_ERR_INTERNAL, ret);
+
+
+            if (on_ota_xfer) {
+                if (esp_ota_set_boot_partition(ota_part) == ESP_OK) {
+                    ESP_LOGI(TAG, "OTA upgrade done!");
+                    send_chunk_ack(cdc_def::CHUNK_XFER_DONE, file_curr_offset);
+                    fflush(stdout);
+                    vTaskDelay(pdMS_TO_TICKS(3000));
+                    esp_restart();
+                } else {
+                    ESP_LOGE(TAG, "Chunk recv hash mismatched!");
+                    send_chunk_ack(cdc_def::CHUNK_ERR_CRC32_FAIL, 0);
+                }
+
             } else {
                 ESP_LOGI(TAG, "Chunk transfer done!");
                 send_chunk_ack(cdc_def::CHUNK_XFER_DONE, file_curr_offset);
