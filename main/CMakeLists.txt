@@ -3,7 +3,7 @@ idf_component_register(
             "cal_main.cpp"
             "protocol/usb_cdc.cpp" "protocol/usb_cdc.hpp" "protocol/config_manager.cpp" "protocol/config_manager.hpp"
             "driver/lhs154kc.c" "driver/lhs154kc.h" "driver/lvgl_wrapper.c" "driver/lvgl_wrapper.h"
-            "misc/file_utils.hpp"
+            "misc/file_utils.hpp" "misc/eternal.hpp"
 
         INCLUDE_DIRS
             "." "driver" "protocol" "misc"

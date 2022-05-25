@@ -4,7 +4,29 @@
 #include <memory>
 #include <nvs_handle.hpp>
 
+#include "eternal.hpp"
+
 #define CFG_MGR_NVS_NAMESPACE "perpetcal"
+
+namespace config
+{
+    enum entry_type : uint8_t
+    {
+        ENTRY_INVALID = 0,
+        ENTRY_U32 = 0x01,
+        ENTRY_I32 = 0x02,
+        ENTRY_STR = 0x03,
+        ENTRY_BLOB = 0x04,
+    };
+
+    enum entry_policy : uint8_t
+    {
+        POLICY_USB_UNREADABLE = BIT0,
+        POLICY_BLE_UNREADABLE = BIT1,
+        POLICY_CLOUD_UNREADABLE = BIT2, // Reserved for Guanlan Cloud platform?
+        POLICY_EXT_UNREADABLE = (BIT0 | BIT1 | BIT2),
+    };
+}
 
 class config_manager
 {
