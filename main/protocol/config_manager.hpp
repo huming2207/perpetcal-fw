@@ -44,6 +44,14 @@ private:
     config_manager() = default;
     static const constexpr char *TAG = "cfg_mgr";
     std::shared_ptr<nvs::NVSHandle> nvs_handle = nullptr;
+    static constexpr const auto key_attr = mapbox::eternal::map<mapbox::eternal::string, uint8_t>(
+        {
+                {"NET_WIFI_SSID", ((config::ENTRY_STR & 0xf) | (config::POLICY_EXT_UNREADABLE << 4))},
+                {"NET_WIFI_PASS", ((config::ENTRY_STR & 0xf) | (config::POLICY_EXT_UNREADABLE << 4))},
+                {"NET_API_ENDPT", (config::ENTRY_STR & 0xf)},
+                {"CDC_USB_TMP_OFF", (config::ENTRY_U32 & 0xf)},
+        }
+    );
 
 public:
     esp_err_t init();
@@ -59,5 +67,7 @@ public:
     esp_err_t nuke();
     esp_err_t flush();
     size_t used_count();
+    static uint8_t get_key_attr(const char *key);
+    static bool is_key_valid(const char *key);
 };
 
