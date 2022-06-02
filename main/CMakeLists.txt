@@ -1,12 +1,12 @@
 idf_component_register(
         SRCS
             "cal_main.cpp"
-            "protocol/usb_cdc.cpp" "protocol/usb_cdc.hpp" "protocol/config_manager.cpp" "protocol/config_manager.hpp"
+            "comm/usb_cdc.cpp" "comm/usb_cdc.hpp" "comm/config_manager.cpp" "comm/config_manager.hpp"
             "driver/lhs154kc.c" "driver/lhs154kc.h" "driver/lvgl_wrapper.c" "driver/lvgl_wrapper.h"
             "misc/file_utils.hpp" "misc/eternal.hpp"
 
         INCLUDE_DIRS
-            "." "driver" "protocol" "misc"
+            "." "driver" "comm" "misc"
 
         REQUIRES
             esp_timer lvgl driver bisheng freertos tinyusb spi_flash nvs_flash app_update
