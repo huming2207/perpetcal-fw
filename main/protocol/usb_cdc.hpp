@@ -43,7 +43,7 @@ namespace cdc_def
         PKT_DEVICE_INFO     = 0x01,
         PKT_PING            = 0x02,
         PKT_CHUNK_METADATA  = 0x10,
-        PKT_DATA_CHUNK      = 0x11,
+        PKT_CHUNK_DATA      = 0x11,
         PKT_CHUNK_ACK       = 0x12,
         PKT_KV_SET_U32      = 0x20,
         PKT_KV_GET_U32      = 0x21,

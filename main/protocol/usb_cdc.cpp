@@ -319,7 +319,7 @@ void usb_cdc::parse_pkt()
         return;
     }
 
-    if (on_chunk_xfer && header->type != cdc_def::PKT_DATA_CHUNK) {
+    if (on_chunk_xfer && header->type != cdc_def::PKT_CHUNK_DATA) {
         ESP_LOGW(TAG, "Invalid state - data chunk expected while received type 0x%x", header->type);
         send_nack();
         return;
@@ -341,7 +341,7 @@ void usb_cdc::parse_pkt()
             break;
         }
 
-        case cdc_def::PKT_DATA_CHUNK: {
+        case cdc_def::PKT_CHUNK_DATA: {
             if (on_ota_xfer) {
                 parse_chunk();
             } else {
