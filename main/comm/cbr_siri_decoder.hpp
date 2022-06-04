@@ -3,6 +3,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/event_groups.h>
 
+#include <ctime>
 #include <esp_http_client.h>
 #include <esp_err.h>
 
@@ -10,10 +11,10 @@ namespace cbr_siri
 {
     struct record
     {
-        char *name;
-        uint32_t bus_route;
-        char *aimed_arrival; // The time on timetable
-        char *predicted_arrival; // The time predicted by the server
+        char route[16];
+        tm aimed_arrival; // The time on timetable
+        tm predicted_arrival; // The time predicted by the server
+        char dest[96];
     };
 
     typedef void(*resp_fn)(record *, size_t);
@@ -47,10 +48,12 @@ class cbr_siri_decoder
 public:
     cbr_siri_decoder() = default;
     esp_err_t init(const char *_api_key, const char *_url, size_t recv_max_len = 131072);
-    esp_err_t poll_stop_prediction(uint32_t stop_id, uint32_t duration_minutes, uint32_t max_records, uint32_t max_txt_len, uint32_t route, cbr_siri::record *records_out);
+    esp_err_t poll_stop_prediction(uint32_t stop_id, uint32_t duration_minutes, uint32_t max_records, uint32_t max_txt_len, uint32_t route);
+    esp_err_t decode_result(cbr_siri::record *records_out, size_t record_cnt, uint32_t timeout_ms = 3000);
 
 private:
     static esp_err_t http_evt_handler(esp_http_client_event_t *evt);
+    static esp_err_t parse_siri_iso8601(tm *time_out, const char *text, int *_utc_off = nullptr);
 
 private:
     EventGroupHandle_t evt_group = nullptr;
