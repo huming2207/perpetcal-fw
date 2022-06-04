@@ -6,9 +6,10 @@ idf_component_register(
             "storage/config_manager.cpp" "storage/config_manager.hpp"
             "driver/lhs154kc.c" "driver/lhs154kc.h" "driver/lvgl_wrapper.c" "driver/lvgl_wrapper.h"
             "misc/file_utils.hpp" "misc/eternal.hpp"
+            "external/pugixml.cpp" "external/pugixml.hpp" "external/pugiconfig.hpp"
 
         INCLUDE_DIRS
-            "." "driver" "comm" "misc"
+            "." "driver" "comm" "misc" "storage" "external"
 
         REQUIRES
             esp_timer lvgl driver bisheng freertos tinyusb spi_flash nvs_flash app_update esp_http_client
