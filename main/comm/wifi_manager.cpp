@@ -13,13 +13,20 @@ esp_err_t wifi_manager::init()
     }
 
     auto ret = esp_netif_init();
-    esp_netif_create_default_wifi_sta();
+    esp_event_loop_create_default();
+
+    wifi_netif = esp_netif_create_default_wifi_sta();
+    if (wifi_netif == nullptr) {
+        ESP_LOGE(TAG, "WiFi netif creation failed");
+        return ESP_ERR_INVALID_STATE;
+    }
 
     wifi_init_config_t init_config = WIFI_INIT_CONFIG_DEFAULT();
     ret = ret ?: esp_wifi_init(&init_config);
     ret = ret ?: esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &event_handler, this, &wifi_any_id);
     ret = ret ?: esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &event_handler, this, &sta_got_ip);
 
+    ESP_LOGI(TAG, "WiFi init done, ret=0x%x", ret);
     return ret;
 }
 
@@ -46,7 +53,7 @@ void wifi_manager::event_handler(void *arg, esp_event_base_t event_base, int32_t
     }
 }
 
-esp_err_t wifi_manager::connect_sta(const char *ssid, const char *passwd, uint32_t timeout_ms, uint32_t _max_retry)
+esp_err_t wifi_manager::connect_sta(const char *ssid, const char *passwd, uint32_t timeout_ms, uint32_t _max_retry, const char *hostname)
 {
     if (ssid == nullptr || passwd == nullptr) {
         return ESP_ERR_INVALID_ARG;
@@ -76,5 +83,12 @@ esp_err_t wifi_manager::connect_sta(const char *ssid, const char *passwd, uint32
         return ESP_FAIL;
     }
 
+    if (hostname == nullptr) {
+        ret = esp_netif_set_hostname(wifi_netif, "perpetcal-dev");
+    } else {
+        ret = esp_netif_set_hostname(wifi_netif, hostname);
+    }
+
+    ESP_LOGI(TAG, "WiFi connect op done, ret=0x%x", ret);
     return ret;
 }

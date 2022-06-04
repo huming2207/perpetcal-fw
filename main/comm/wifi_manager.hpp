@@ -28,7 +28,7 @@ public:
 
 public:
     esp_err_t init();
-    esp_err_t connect_sta(const char *ssid, const char *passwd, uint32_t timeout_ms = 20000, uint32_t _max_retry = 5);
+    esp_err_t connect_sta(const char *ssid, const char *passwd, uint32_t timeout_ms = 20000, uint32_t _max_retry = 5, const char *hostname = nullptr);
 
 private:
     static void event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data);
@@ -37,6 +37,7 @@ private:
     wifi_manager() = default;
     volatile uint32_t retry_cnt = 0;
     uint32_t max_retry = 5;
+    esp_netif_obj *wifi_netif = nullptr;
     EventGroupHandle_t wifi_evt = nullptr;
     esp_event_handler_instance_t wifi_any_id;
     esp_event_handler_instance_t sta_got_ip;
