@@ -33,7 +33,6 @@ esp_err_t usb_cdc::init()
             "",
             "",
     };
-    static tusb_desc_device_t desc_device = {};
 
     tinyusb_config_t tusb_cfg = {}; // the configuration using default values
     tusb_cfg.string_descriptor = desc_str;
@@ -178,12 +177,11 @@ esp_err_t usb_cdc::send_dev_info(uint32_t timeout_ms)
     cdc_def::device_info dev_info = {};
     auto ret = esp_efuse_mac_get_default(dev_info.mac_addr);
     ret = ret ?: esp_flash_read_unique_chip_id(esp_flash_default_chip, (uint64_t *)dev_info.flash_id);
-    strcpy(dev_info.esp_idf_ver, idf_ver);
-    strcpy(dev_info.dev_build, dev_build);
-    strcpy(dev_info.dev_model, dev_model);
+    strncpy(dev_info.esp_idf_ver, idf_ver, sizeof(IDF_VER));
+    strncpy(dev_info.dev_build, dev_build, sizeof(CDC_DEVICE_MODEL));
+    strncpy(dev_info.dev_model, dev_model, sizeof(CDC_DEVICE_FW_VER));
 
     ret = ret ?: send_pkt(cdc_def::PKT_DEVICE_INFO, (uint8_t *)&dev_info, sizeof(dev_info), timeout_ms);
-
     return ret;
 }
 
@@ -564,8 +562,6 @@ void usb_cdc::parse_chunk()
             file_crc = 0;
             on_chunk_xfer = false;
             on_ota_xfer = false;
-
-
 
             if (on_ota_xfer) {
                 if (esp_ota_set_boot_partition(ota_part) == ESP_OK) {
